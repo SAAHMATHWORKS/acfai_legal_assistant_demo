@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Legal Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .chat-box { border: 1px solid #ccc; padding: 20px; height: 400px; overflow-y: auto; margin: 20px 0; }
+        .user { background: #e3f2fd; padding: 10px; margin: 5px; border-radius: 10px; }
+        .assistant { background: #f5f5f5; padding: 10px; margin: 5px; border-radius: 10px; }
+        .system { background: #fff3e0; padding: 5px; margin: 2px; border-radius: 5px; font-size: 12px; }
+        input { width: 70%; padding: 10px; }
+        button { padding: 10px 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧑‍⚖️ Legal Assistant</h1>
+        <div id="chat" class="chat-box"></div>
+        <div>
+            <input type="text" id="message" placeholder="Posez votre question juridique..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()">Envoyer</button>
+        </div>
+        <div id="sessionInfo"></div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let currentResponse = '';
+
+        function addMessage(content, type = 'assistant') {
+            const chat = document.getElementById('chat');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = type;
+            messageDiv.innerHTML = content;
+            chat.appendChild(messageDiv);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        async function sendMessage() {
+            const messageInput = document.getElementById('message');
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+
+            // Add user message
+            addMessage(`<strong>👤 Vous:</strong> ${message}`, 'user');
+            messageInput.value = '';
+
+            // Clear previous response
+            currentResponse = '';
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'assistant';
+            responseDiv.innerHTML = '<strong>🤖 Assistant:</strong> <span id="currentResponse"></span>';
+            document.getElementById('chat').appendChild(responseDiv);
+
+            try {
+                const url = `http://localhost:8000/chat?message=${encodeURIComponent(message)}${currentSessionId ? `&session_id=${currentSessionId}` : ''}`;
+                const eventSource = new EventSource(url);
+
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    
+                    switch(data.type) {
+                        case 'session':
+                            currentSessionId = data.session_id;
+                            document.getElementById('sessionInfo').innerHTML = `Session: ${currentSessionId}`;
+                            break;
+                            
+                        case 'content':
+                            currentResponse += data.content;
+                            document.getElementById('currentResponse').innerHTML = currentResponse;
+                            break;
+                            
+                        case 'node_transition':
+                            addMessage(`<em>→ ${data.node}</em>`, 'system');
+                            break;
+                            
+                        case 'search_start':
+                            addMessage(`🔍 Recherche en cours (${data.country})...`, 'system');
+                            break;
+                            
+                        case 'search_end':
+                            addMessage(`✅ Recherche ${data.country} terminée`, 'system');
+                            break;
+                            
+                        case 'end':
+                            eventSource.close();
+                            document.getElementById('currentResponse').id = ''; // Remove ID
+                            break;
+                    }
+                };
+
+                eventSource.onerror = function(event) {
+                    addMessage('❌ Erreur de connexion', 'system');
+                    eventSource.close();
+                };
+
+            } catch (error) {
+                addMessage(`❌ Erreur: ${error.message}`, 'system');
+            }
+        }
+    </script>
+</body>
+</html>

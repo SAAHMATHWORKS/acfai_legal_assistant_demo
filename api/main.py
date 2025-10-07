@@ -1,12 +1,14 @@
-# [file name]: api/main.py
+# api/main.py
 from typing import Optional
-from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import HumanMessage, AIMessageChunk
+from langchain_core.messages import AIMessageChunk
 import json
 from uuid import uuid4
 import logging
+import os
 import asyncio
 
 # Import your existing system
@@ -20,20 +22,56 @@ logger = logging.getLogger(__name__)
 # Global variables
 chat_manager = None
 graph = None
+system_initialized = False
+
 
 async def initialize_system():
-    """Initialize the legal assistant system"""
-    global chat_manager, graph
+    global chat_manager, graph, system_initialized
     try:
+        # Check for required environment variables based on YOUR settings
+        required_vars = ['OPENAI_API_KEY', 'MONGO_URI', 'NEON_DB_URL', 'NEON_END_POINT']
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        
+        if missing_vars:
+            logger.warning(f"⚠️ Missing environment variables: {missing_vars}")
+            logger.warning("System will start but may not function properly")
+        
         system = await setup_system()
         chat_manager = system["chat_manager"]
         graph = system["graph"]
-        logger.info("✅ Legal assistant system initialized for FastAPI")
+        system_initialized = True
+        logger.info("✅ Legal assistant system initialized for Hugging Face")
     except Exception as e:
         logger.error(f"❌ Failed to initialize system: {e}")
-        raise
+        system_initialized = False
 
-app = FastAPI(title="Legal Assistant API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern lifespan event handler"""
+    # Startup logic
+    logger.info("🚀 Starting Legal Assistant API...")
+    
+    # Initialize system in background
+    initialization_task = asyncio.create_task(initialize_system())
+    
+    yield  # App runs here
+    
+    # Shutdown logic
+    logger.info("🛑 Shutting down Legal Assistant API...")
+    initialization_task.cancel()
+    try:
+        await initialization_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(
+    title="Legal Assistant API",
+    version="1.0.0",
+    description="Multi-country legal RAG system for Benin and Madagascar",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -42,13 +80,97 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  
     allow_headers=["*"], 
-    expose_headers=["Content-Type"], 
 )
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize system on startup"""
-    await initialize_system()
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    """Simple homepage for better UX"""
+    return """
+    <html>
+        <head>
+            <title>Legal Assistant API</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .card { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 8px; }
+                .status-ready { color: green; }
+                .status-starting { color: orange; }
+                .status-error { color: red; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🧑‍⚖️ Legal Assistant API</h1>
+                <p>Multi-country legal RAG system for Benin and Madagascar</p>
+                
+                <div class="card">
+                    <h3>📚 Available Endpoints</h3>
+                    <ul>
+                        <li><a href="/docs">API Documentation</a></li>
+                        <li><a href="/health">Health Check</a></li>
+                        <li><strong>GET /chat</strong> - Streaming chat</li>
+                        <li><strong>GET /sessions/{id}/history</strong> - Conversation history</li>
+                    </ul>
+                </div>
+                
+                <div class="card">
+                    <h3>🔧 System Status</h3>
+                    <div id="status">
+                        <p>Loading system status...</p>
+                    </div>
+                </div>
+                
+                <script>
+                    async function updateStatus() {
+                        try {
+                            const response = await fetch('/health');
+                            const data = await response.json();
+                            
+                            const statusEl = document.getElementById('status');
+                            let statusClass = 'status-starting';
+                            let statusText = '🔄 Starting...';
+                            
+                            if (data.system_initialized) {
+                                statusClass = 'status-ready';
+                                statusText = '✅ System Ready';
+                            } else if (data.status === 'error') {
+                                statusClass = 'status-error';
+                                statusText = '❌ System Error';
+                            }
+                            
+                            statusEl.innerHTML = `
+                                <p class="${statusClass}"><strong>${statusText}</strong></p>
+                                <p><strong>MongoDB:</strong> ${data.mongodb_connected ? '✅ Connected' : '❌ Disconnected'}</p>
+                                <p><strong>Countries:</strong> ${data.available_countries?.join(', ') || 'Loading...'}</p>
+                                <p><strong>OpenAI:</strong> ${data.openai_configured ? '✅ Configured' : '❌ Not Configured'}</p>
+                            `;
+                        } catch (error) {
+                            document.getElementById('status').innerHTML = 
+                                '<p class="status-error">❌ Failed to load system status</p>';
+                        }
+                    }
+                    
+                    updateStatus();
+                    setInterval(updateStatus, 5000);
+                </script>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.get("/health")
+async def health_check():
+    """Enhanced health check with your specific environment variables"""
+    return {
+        "status": "healthy" if system_initialized else "starting",
+        "system_initialized": system_initialized,
+        "service": "Legal Assistant API",
+        "available_countries": ["benin", "madagascar"] if system_initialized else [],
+        "mongodb_connected": system_initialized and bool(os.getenv("MONGO_URI")),
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "neon_postgres_configured": bool(os.getenv("NEON_END_POINT")),
+        "missing_variables": [var for var in ['OPENAI_API_KEY', 'MONGO_URI', 'NEON_DB_URL', 'NEON_END_POINT'] if not os.getenv(var)],
+    }
 
 def serialize_ai_message_chunk(chunk): 
     """Serialize AI message chunks for streaming"""
@@ -61,21 +183,21 @@ def serialize_ai_message_chunk(chunk):
 
 async def generate_legal_chat_responses(message: str, session_id: Optional[str] = None):
     """Generate streaming responses for legal chat"""
+    if not system_initialized:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'System is still starting up. Please try again in a moment.'})}\n\n"
+        yield f"data: {json.dumps({'type': 'end'})}\n\n"
+        return
     
     is_new_conversation = session_id is None
     
     if is_new_conversation:
-        # Generate new session ID for first message
         session_id = f"api_{uuid4()}"
         logger.info(f"🆕 New conversation session: {session_id}")
-        
-        # First send the session ID
         yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
     else:
         logger.info(f"🔄 Continuing session: {session_id}")
 
     try:
-        # Prepare input state
         input_state = {
             "messages": [{"role": "user", "content": message, "meta": {}}],
             "legal_context": {
@@ -98,7 +220,6 @@ async def generate_legal_chat_responses(message: str, session_id: Optional[str] 
             }
         }
 
-        # Stream events from the graph
         events = graph.astream_events(
             MultiCountryLegalState(**input_state),
             version="v2",
@@ -107,53 +228,42 @@ async def generate_legal_chat_responses(message: str, session_id: Optional[str] 
 
         current_content = ""
         current_node = ""
-        search_in_progress = False
 
         async for event in events:
             event_type = event["event"]
             node_name = event.get("name", "")
             
-            # Track node transitions for debugging
             if node_name != current_node:
                 current_node = node_name
                 yield f"data: {json.dumps({'type': 'node_transition', 'node': node_name})}\n\n"
 
             if event_type == "on_chat_model_stream":
-                # Stream LLM content
                 chunk_content = serialize_ai_message_chunk(event["data"]["chunk"])
                 current_content += chunk_content
                 yield f"data: {json.dumps({'type': 'content', 'content': chunk_content})}\n\n"
                 
             elif event_type == "on_chat_model_end":
-                # LLM response complete
                 yield f"data: {json.dumps({'type': 'content_end'})}\n\n"
                 
             elif event_type == "on_chain_start" and "retrieval" in node_name:
-                # Search starting
-                search_in_progress = True
                 country = node_name.replace("_retrieval", "")
                 yield f"data: {json.dumps({'type': 'search_start', 'country': country})}\n\n"
                 
             elif event_type == "on_chain_end" and "retrieval" in node_name:
-                # Search completed
-                search_in_progress = False
                 country = node_name.replace("_retrieval", "")
                 yield f"data: {json.dumps({'type': 'search_end', 'country': country})}\n\n"
                 
             elif event_type == "on_tool_end":
-                # Tool execution completed (like email sending)
                 tool_name = event["name"]
                 yield f"data: {json.dumps({'type': 'tool_complete', 'tool': tool_name})}\n\n"
 
             elif event_type == "on_graph_end":
-                # Graph execution completed
                 yield f"data: {json.dumps({'type': 'graph_end'})}\n\n"
 
     except Exception as e:
         logger.error(f"Error in streaming: {e}")
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
     
-    # Send final end event
     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
 @app.get("/chat")
@@ -161,26 +271,21 @@ async def chat_stream(
     message: str = Query(..., description="User message"),
     session_id: Optional[str] = Query(None, description="Existing session ID")
 ):
-    """Streaming chat endpoint for legal assistant"""
+    """Streaming chat endpoint with initialization check"""
+    if not system_initialized:
+        raise HTTPException(
+            status_code=503, 
+            detail="System is still starting up. Please try again in a moment."
+        )
+    
     return StreamingResponse(
         generate_legal_chat_responses(message, session_id), 
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control"
         }
     )
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "system_initialized": chat_manager is not None and graph is not None,
-        "service": "Legal Assistant API"
-    }
 
 @app.get("/sessions/{session_id}/history")
 async def get_conversation_history(session_id: str):
@@ -203,14 +308,3 @@ async def get_conversation_history(session_id: str):
         }
     except Exception as e:
         return {"error": str(e)}
-
-@app.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session (for cleanup)"""
-    # Note: With PostgreSQL checkpoints, sessions persist in database
-    # This would require custom implementation to clear checkpoints
-    return {"message": "Session deletion would require custom checkpoint cleanup"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

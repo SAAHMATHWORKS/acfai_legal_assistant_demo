@@ -1,7 +1,11 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv("../.env", override=True)
+# Change to:
+try:
+    load_dotenv("../.env", override=True)
+except:
+    pass  # Ignore if .env file doesn't exist (like on Hugging Face)
 
 class Settings:
     # API Keys
