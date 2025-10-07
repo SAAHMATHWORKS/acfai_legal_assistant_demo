@@ -21,7 +21,8 @@ class RetrievalNodes:
                 logger.error(f"❌ Country not configured: {country_code}")
                 return {
                     "search_results": f"Country {country_code} not available",
-                    "detected_articles": []
+                    "detected_articles": [],
+                    "supplemental_message": f"Pays {country_code} non configuré dans le système."
                 }
             
             retriever = self.country_retrievers[country_code]
@@ -29,11 +30,19 @@ class RetrievalNodes:
             last_human = self._get_last_human_message(s.get("messages", []))
             
             if not last_human:
-                return {"search_results": f"No query for {country_code} retrieval", "detected_articles": []}
+                return {
+                    "search_results": f"No query for {country_code} retrieval", 
+                    "detected_articles": [],
+                    "supplemental_message": "Aucune requête trouvée pour la recherche."
+                }
 
             user_query = last_human.get("content", "").strip()
             if not user_query:
-                return {"search_results": f"Empty query for {country_code} retrieval", "detected_articles": []}
+                return {
+                    "search_results": f"Empty query for {country_code} retrieval", 
+                    "detected_articles": [],
+                    "supplemental_message": "Requête vide pour la recherche."
+                }
             
             logger.info(f"🌍 Performing {country_code} retrieval for: '{user_query[:50]}...'")
             
@@ -48,14 +57,22 @@ class RetrievalNodes:
             return {
                 "search_results": search_results,
                 "detected_articles": detected_articles,
-                "last_search_query": user_query
+                "last_search_query": user_query,
+                "supplemental_message": supplemental_message,  # Pass the supplemental message to state
+                # Store complex data in search_metadata instead of legal_context
+                "search_metadata": {
+                    "applied_filters": applied_filters,
+                    "documents_count": len(enhanced_docs),
+                    "supplemental_message": supplemental_message
+                }
             }
             
         except Exception as e:
             logger.error(f"Error in {country_code} retrieval: {str(e)}")
             return {
                 "search_results": f"Erreur lors de la recherche {country_code}: {str(e)}",
-                "detected_articles": []
+                "detected_articles": [],
+                "supplemental_message": f"Erreur lors de la recherche: {str(e)}"
             }
     
     def _get_last_human_message(self, messages: list) -> Dict[str, Any]:

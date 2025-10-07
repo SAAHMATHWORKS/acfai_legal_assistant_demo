@@ -17,7 +17,7 @@ class HumanApprovalNode:
         self,
         state: MultiCountryLegalState,
         config: RunnableConfig
-    ) -> Command[Literal["response"]]:  # Updated: Removed "process_assistance"
+    ) -> Command[Literal["response"]]:
         """Process human approval with interrupt"""
         try:
             # Validate required fields
@@ -77,7 +77,7 @@ class HumanApprovalNode:
         self, 
         state: MultiCountryLegalState, 
         decision: dict
-    ) -> Command[Literal["response"]]:  # Updated: Removed "process_assistance"
+    ) -> Command[Literal["response"]]:
         """Handle approved request (sends email and routes to response)"""
         logger.info(f"✅ Request APPROVED for {state.user_email}")
         

@@ -1,3 +1,4 @@
+# core/retriever.py
 import re
 import logging
 import asyncio
@@ -35,19 +36,46 @@ class LegalRetriever:
             # Fallback automatique si aucun résultat pour case_study
             if not enhanced_docs and initial_doc_type == "case_study":
                 logger.info("🔄 Fallback: Aucun case_study trouvé, recherche dans les articles")
-                pre_filter["doc_type"] = "articles"
-                pre_filter["fallback_used"] = True
+                
+                # Create new filter for articles - DON'T rebuild, just modify
+                fallback_filter = pre_filter.copy()  # Copy the original filter
+                fallback_filter["doc_type"] = "articles"  # Force articles type
+                
+                logger.info(f"🔄 Fallback filter: {fallback_filter}")  # Log the fallback filter
                 
                 enhanced_docs, detected_articles, applied_filters = await self._perform_search_async(
-                    user_query, country, pre_filter
+                    user_query, country, fallback_filter
                 )
+                
+                # Mark that fallback was used
                 applied_filters["original_search"] = "case_study"
                 applied_filters["fallback_to"] = "articles"
+                applied_filters["fallback_used"] = True
                 
                 # Message personnalisé pour le fallback
-                message_supplementaire = "La base sera enrichie avec des décisions de justice prochainement."
+                if enhanced_docs:
+                    message_supplementaire = (
+                        "⚠️ Nous nous excusons, mais aucune décision de justice n'a été trouvée pour votre requête. "
+                        "La base de données sera enrichie avec des décisions de justice prochainement. "
+                        "En attendant, voici des articles de loi pertinents qui peuvent vous aider."
+                    )
+                else:
+                    # Check if it's a MongoDB error
+                    if "mongodb_error" in applied_filters:
+                        message_supplementaire = (
+                            "⚠️ Nous nous excusons, mais une erreur technique s'est produite lors de la recherche. "
+                            "Nous travaillons à résoudre ce problème. Veuillez réessayer dans quelques instants."
+                        )
+                    else:
+                        message_supplementaire = (
+                            "⚠️ Nous nous excusons, mais aucune décision de justice n'a été trouvée pour votre requête. "
+                            "La base de données sera enrichie avec des décisions de justice prochainement. "
+                            "De plus, aucun article de loi correspondant n'a été trouvé. "
+                            "Essayez de reformuler votre question avec des termes plus généraux."
+                        )
             
             logger.info(f"🔍 Search completed: {len(enhanced_docs)} documents found")
+            logger.info(f"📢 Supplemental message: {message_supplementaire[:100] if message_supplementaire else 'None'}")
             return enhanced_docs, detected_articles, applied_filters, message_supplementaire
             
         except Exception as e:
@@ -66,7 +94,6 @@ class LegalRetriever:
             logger.info(f"🔍 Requête enrichie: {enhanced_query[:100]}...")
             
             # CRITICAL FIX: Run synchronous vectorstore operation in thread pool
-            import asyncio
             docs = await asyncio.get_event_loop().run_in_executor(
                 None,  # Use default thread pool
                 lambda: self.vectorstore.similarity_search(
@@ -89,7 +116,10 @@ class LegalRetriever:
             
         except Exception as e:
             logger.error(f"Error in _perform_search_async: {str(e)}")
-            return [], [], {"error": str(e)}
+            # Mark the filter with MongoDB error for better error handling
+            error_filter = pre_filter.copy()
+            error_filter["mongodb_error"] = str(e)
+            return [], [], error_filter
 
     async def _debug_search_issue(self, pre_filter: Dict):
         """Debug why search returned no results"""
@@ -107,6 +137,16 @@ class LegalRetriever:
                 lambda: self.collection.count_documents({"pays": pre_filter.get("pays")})
             )
             logger.info(f"🌍 Documents for country {pre_filter.get('pays')}: {country_count}")
+            
+            # Check documents with doc_type
+            doc_type_count = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.collection.count_documents({
+                    "pays": pre_filter.get("pays"),
+                    "doc_type": pre_filter.get("doc_type")
+                })
+            )
+            logger.info(f"📋 Documents with doc_type {pre_filter.get('doc_type')}: {doc_type_count}")
             
             # Check documents with embeddings
             embedding_count = await asyncio.get_event_loop().run_in_executor(
@@ -235,7 +275,6 @@ class LegalRetriever:
                         enhanced_results.append(ref_doc)
         
         return enhanced_results
-
     def format_search_results(self, query: str, enhanced_docs: List[Document], 
                             detected_articles: List[str], applied_filters: Dict[str, Any], 
                             country: str, supplemental_message: str = "") -> str:
@@ -248,47 +287,57 @@ class LegalRetriever:
             # Check if this was an error case
             if "error" in applied_filters:
                 return f"""
-**🚨 ERREUR DE RECHERCHE - {country_name.upper()}**
+                    **🚨 ERREUR DE RECHERCHE - {country_name.upper()}**
 
-Une erreur s'est produite lors de la recherche: {applied_filters['error']}
+                    Une erreur s'est produite lors de la recherche: {applied_filters['error']}
 
-**Informations de débogage:**
-- **Requête**: "{query}"
-- **Pays**: {country_name}
-- **Type de document recherché**: {doc_type}
-- **Filtres**: {applied_filters}
+                    **Informations de débogage:**
+                    - **Requête**: "{query}"
+                    - **Pays**: {country_name}
+                    - **Type de document recherché**: {doc_type}
+                    - **Filtres**: {applied_filters}
 
-Veuillez réessayer ou contacter le support technique.
-"""
+                    Veuillez réessayer ou contacter le support technique.
+                    """
             
             if applied_filters.get("fallback_used"):
                 # Cas où le fallback a été utilisé mais n'a rien trouvé non plus
+                mongodb_error_note = ""
+                if "mongodb_error" in applied_filters:
+                    mongodb_error_note = f"\n\n**⚠️ Erreur technique**: {applied_filters['mongodb_error'][:200]}..."
+                
                 return f"""
-**🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
+                    **🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
 
-Aucun document trouvé pour votre requête concernant la jurisprudence.
+                    {supplemental_message}
 
-**💡 Informations :**
-- Votre recherche portait sur des décisions de justice
-- La base de données sera enrichie avec des décisions de justice prochainement
-- En attendant, vous pouvez consulter les articles de loi pour des informations générales
+                    **💡 Informations :**
+                    - Votre recherche portait sur des **décisions de justice (jurisprudence)**
+                    - Aucune décision de justice n'a été trouvée dans la base de données
+                    - Aucun article de loi correspondant n'a été trouvé non plus
+                    {mongodb_error_note}
 
-**Filtres appliqués**: {applied_filters}
-"""
+                    **Suggestion**: Essayez de reformuler votre requête avec des termes plus généraux.
+
+                    **Recherche effectuée**: 
+                    - Type initial: {applied_filters.get('original_search', 'N/A')}
+                    - Fallback vers: {applied_filters.get('fallback_to', 'N/A')}
+                    - Pays: {country_name}
+                    """
             else:
                 # Cas normal sans fallback
                 return f"""
-**🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
+                    **🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
 
-Aucun document trouvé avec les critères suivants:
-- **Type de document**: {doc_type}
-- **Catégorie**: {applied_filters.get('categorie', 'Toutes')}
-- **Requête**: "{query}"
+                    Aucun document trouvé avec les critères suivants:
+                    - **Type de document**: {doc_type}
+                    - **Catégorie**: {applied_filters.get('categorie', 'Toutes')}
+                    - **Requête**: "{query}"
 
-**Suggestion**: Essayez avec des termes plus généraux ou vérifiez l'orthographe.
+                    **Suggestion**: Essayez avec des termes plus généraux ou vérifiez l'orthographe.
 
-**Filtres appliqués**: {applied_filters}
-"""
+                    **Filtres appliqués**: {applied_filters}
+                    """
 
         # Si des documents sont trouvés
         doc_type = applied_filters.get("doc_type", "articles")
@@ -297,22 +346,21 @@ Aucun document trouvé avec les critères suivants:
         fallback_note = ""
         if applied_filters.get("fallback_used"):
             fallback_note = f"""
-**💡 Note importante :**
-Votre requête concernait initialement des **décisions de justice**. 
-Comme la base ne contient pas encore de jurisprudence, voici des informations issues des **textes de loi**.
-{supplemental_message}
-"""
+                **💡 {supplemental_message}**
+
+                ---
+                """
         
         search_results = f"""
-**🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
-**Type de documents**: {doc_type_fr}
-**Requête**: "{query}"
-**Juridiction**: {country_name}
-**Articles détectés**: {', '.join(detected_articles) if detected_articles else 'Aucun'}
-**Filtres appliqués**: {applied_filters}
-**Documents trouvés**: {len(enhanced_docs)}
-{fallback_note}
-"""
+                **🔍 RECHERCHE JURIDIQUE - {country_name.upper()}**
+                **Type de documents**: {doc_type_fr}
+                **Requête**: "{query}"
+                **Juridiction**: {country_name}
+                **Articles détectés**: {', '.join(detected_articles) if detected_articles else 'Aucun'}
+                **Documents trouvés**: {len(enhanced_docs)}
+
+                {fallback_note}
+                """
 
         # Formatage des documents trouvés
         main_docs = [doc for doc in enhanced_docs if not doc.metadata.get("is_reference", False)]
@@ -323,10 +371,11 @@ Comme la base ne contient pas encore de jurisprudence, voici des informations is
             content = doc.page_content[:600]
             
             search_results += f"""
-**📄 DOCUMENT {i+1}** (Type: {doc_type})
-- **Source**: {source}
-- **Contenu**: {content}...
-"""
+                    **📄 DOCUMENT {i+1}** (Type: {doc_type})
+                    - **Source**: {source}
+                    - **Contenu**: {content}...
+
+                    """
         
         return search_results
 

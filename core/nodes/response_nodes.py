@@ -31,7 +31,8 @@ Je vois que vous souhaitez parler à un avocat. Pour vous aider, j'ai besoin de 
                     "role": "assistant",
                     "content": response_content,
                     "meta": {"assistance_step": "collecting_email"}
-                }]
+                }],
+                "supplemental_message": ""  # Clear any previous supplemental messages
             }
         
         elif assistance_step == "collecting_description":
@@ -50,7 +51,8 @@ Cette description aidera notre équipe à mieux vous orienter.
                     "role": "assistant",
                     "content": response_content,
                     "meta": {"assistance_step": "collecting_description"}
-                }]
+                }],
+                "supplemental_message": ""  # Clear any previous supplemental messages
             }
         
         elif assistance_step == "confirming_send":
@@ -71,7 +73,8 @@ Répondez par :
                     "role": "assistant",
                     "content": response_content,
                     "meta": {"assistance_step": "confirming_send"}
-                }]
+                }],
+                "supplemental_message": ""  # Clear any previous supplemental messages
             }
         
         else:
@@ -81,8 +84,11 @@ Répondez par :
     async def _generate_llm_response(self, state: MultiCountryLegalState, config: RunnableConfig) -> Dict[str, Any]:
         """Generate LLM-based response for normal conversation flows"""
         try:
+            # Include supplemental message in the response if present
+            supplemental_message = state.supplemental_message or ""
+            
             # Synthesize response using LLM
-            response_content = await self._synthesize_response(state)
+            response_content = await self._synthesize_response(state, supplemental_message)
             
             return {
                 "messages": [{
@@ -92,7 +98,8 @@ Répondez par :
                         "timestamp": datetime.now().isoformat(),
                         "generated_by": "llm"
                     }
-                }]
+                }],
+                "supplemental_message": ""  # Clear after using
             }
         except Exception as e:
             logger.error(f"Error generating LLM response: {str(e)}")
@@ -101,15 +108,16 @@ Répondez par :
                     "role": "assistant",
                     "content": self._create_error_message(str(e)),
                     "meta": {"is_error": True}
-                }]
+                }],
+                "supplemental_message": f"Erreur: {str(e)}"
             }
 
-    async def _synthesize_response(self, state: MultiCountryLegalState) -> str:
+    async def _synthesize_response(self, state: MultiCountryLegalState, supplemental_message: str = "") -> str:
         """Synthesize final response based on graph execution"""
         s = state.model_dump()
         
         # Build context-aware system prompt
-        system_prompt = self._build_system_prompt(state)
+        system_prompt = self._build_system_prompt(state, supplemental_message)
         conversation_messages = self._build_conversation_messages(system_prompt, s.get("messages", []))
         
         # Always use LLM to generate final response
@@ -118,7 +126,7 @@ Répondez par :
         
         return ai_resp.content if hasattr(ai_resp, 'content') else str(ai_resp)
 
-    def _build_system_prompt(self, state: MultiCountryLegalState) -> str:
+    def _build_system_prompt(self, state: MultiCountryLegalState, supplemental_message: str = "") -> str:
         """Build context-aware system prompt"""
         s = state.model_dump()
         
@@ -126,6 +134,10 @@ Répondez par :
 
 TÂCHE: Fournir une réponse claire, précise et utile à l'utilisateur.
 """
+
+        # Add supplemental message if available
+        if supplemental_message:
+            base_prompt += f"\nMESSAGE IMPORTANT: {supplemental_message}\n"
 
         # Add legal context if available
         country_name = s.get("legal_context", {}).get("jurisdiction", "Unknown")
@@ -180,25 +192,26 @@ INSTRUCTIONS GÉNÉRALES:
         """Handle human approval interrupts"""
         logger.info("👨‍⚖️ Human approval node - triggering interrupt")
         
-        # For human approval, we still want a meaningful response
         return {
             "approval_status": "pending",
             "messages": [{
                 "role": "assistant", 
                 "content": "⏳ Votre demande d'assistance nécessite une approbation manuelle. Un modérateur va examiner votre demande.",
                 "meta": {"requires_approval": True}
-            }]
+            }],
+            "supplemental_message": ""
         }
 
     async def process_assistance_node(self, state: MultiCountryLegalState, config: RunnableConfig) -> Dict[str, Any]:
         """Process assistance after approval - let LLM generate final message"""
         logger.info("📧 Processing assistance request")
         
-        # The LLM will generate the final success message in response_generation_node
         return {
             "email_status": "sent",
             "approval_status": "approved",
-            "messages": []  # Empty messages so LLM generates the final response
+            "assistance_step": "completed",
+            "messages": [],  # Empty messages so LLM generates the final response
+            "supplemental_message": "Votre demande d'assistance a été traitée avec succès."
         }
 
     def _create_error_message(self, error: str) -> str:

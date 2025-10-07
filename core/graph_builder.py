@@ -124,7 +124,8 @@ class GraphBuilder:
             {
                 "need_email": "response",  # Ask for email
                 "need_description": "response",  # Ask for description
-                "ready_to_confirm": "assistance_confirm"
+                "ready_to_confirm": "assistance_confirm",
+                "cancelled": "response" 
             }
         )
         
@@ -158,7 +159,7 @@ class GraphBuilder:
             }
         )
         
-        # workflow.add_edge("process_assistance", "response")
+        workflow.add_edge("process_assistance", "response")
         
         logger.info(f"Scalable graph built for {len(self.country_retrievers)} countries: {list(self.country_retrievers.keys())}")
         return workflow
@@ -166,13 +167,21 @@ class GraphBuilder:
     def _create_assistance_collect_wrapper(self):
         """Wrapper to ensure proper method signature for assistance collection"""
         async def wrapper(state: MultiCountryLegalState, config: RunnableConfig) -> Dict[str, Any]:
-            return await self.assistance_nodes.collect_assistance_info_node(state, config)
+            result = await self.assistance_nodes.collect_assistance_info_node(state, config)
+            # Ensure supplemental_message is included if not present
+            if "supplemental_message" not in result:
+                result["supplemental_message"] = ""
+            return result
         return wrapper
     
     def _create_assistance_confirm_wrapper(self):
         """Wrapper to ensure proper method signature for assistance confirmation"""
         async def wrapper(state: MultiCountryLegalState, config: RunnableConfig) -> Dict[str, Any]:
-            return await self.assistance_nodes.confirm_assistance_send_node(state, config)
+            result = await self.assistance_nodes.confirm_assistance_send_node(state, config)
+            # Ensure supplemental_message is included if not present
+            if "supplemental_message" not in result:
+                result["supplemental_message"] = ""
+            return result
         return wrapper
     
     def _route_after_router(self, state: MultiCountryLegalState) -> str:
@@ -235,12 +244,13 @@ class GraphBuilder:
         """Process assistance after approval"""
         logger.info("Processing assistance request")
         
-        # Mark assistance as completed
+        # Mark assistance as completed with supplemental message
         return {
             "email_status": "sent",
             "approval_status": "approved", 
             "assistance_step": "completed",
-            "messages": []
+            "messages": [],
+            # "supplemental_message": "Votre demande d'assistance a été traitée avec succès et envoyée à notre équipe juridique."
         }
 
     def debug_state(self, state: MultiCountryLegalState, step: str) -> None:
@@ -251,5 +261,6 @@ class GraphBuilder:
             logger.debug(f"Assistance step: {getattr(state, 'assistance_step', 'None')}")
             logger.debug(f"User email: {getattr(state, 'user_email', 'None')}")
             logger.debug(f"Assistance description: {getattr(state, 'assistance_description', 'None')}")
+            logger.debug(f"Supplemental message: {getattr(state, 'supplemental_message', 'None')}")
             logger.debug(f"Available countries: {list(self.country_retrievers.keys())}")
             logger.debug("=== END STATE DEBUG ===")

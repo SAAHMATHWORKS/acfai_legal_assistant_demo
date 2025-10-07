@@ -5,7 +5,7 @@ import operator
 
 class MultiCountryLegalState(BaseModel):
     messages: Annotated[List[Dict[str, Any]], operator.add] = Field(default_factory=list)
-    legal_context: Dict[str, str] = Field(
+    legal_context: Dict[str, Any] = Field(
         default_factory=lambda: {
             "jurisdiction": "Unknown",
             "user_type": "general", 
@@ -13,13 +13,18 @@ class MultiCountryLegalState(BaseModel):
             "detected_country": "unknown"
         }
     )
+    # FIX: Make supplemental_message handle concurrent updates
+    supplemental_message: Optional[str] = Field(
+        default="",
+        description="Supplemental message to display to user (e.g., fallback messages, apologies)"
+    )
     session_id: Optional[str] = None
     last_search_query: Optional[str] = None
     detected_articles: Annotated[List[str], operator.add] = Field(default_factory=list)
     router_decision: Optional[str] = None
     search_results: Optional[str] = None
     route_explanation: Optional[str] = None
-    country: Optional[str] = Field(default=None)  # Add explicit country field
+    country: Optional[str] = Field(default=None)
     
     # Assistance email fields
     assistance_requested: bool = Field(default=False)
@@ -46,6 +51,9 @@ class MultiCountryLegalState(BaseModel):
     # Conversation summary fields
     summary_generated: bool = Field(default=False)
     last_summary_timestamp: Optional[str] = Field(default=None)
+
+    # NEW: Search-related fields to prevent storing complex data in legal_context
+    search_metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @staticmethod
     def detect_country(text: str) -> str:

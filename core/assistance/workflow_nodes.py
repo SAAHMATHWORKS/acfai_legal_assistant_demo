@@ -19,6 +19,21 @@ class AssistanceWorkflowNodes:
         
         logger.info(f"📝 Collecting assistance info - step: {assistance_step}")
         logger.debug(f"User input: {user_input}")
+        # 🔥 NEW: Check for cancellation commands
+        cancellation_keywords = ["annuler", "cancel", "stop", "arrêter", "je ne veux plus", "plus besoin", "abandonner"]
+        if any(keyword in user_input for keyword in cancellation_keywords):
+            logger.info("🚫 User requested cancellation of assistance workflow")
+            return {
+                "assistance_step": "cancelled",
+                "assistance_requested": False,
+                "user_email": None,
+                "assistance_description": None,
+                "messages": [{
+                    "role": "assistant",
+                    "content": "✅ Votre demande d'assistance a été annulée. Comment puis-je vous aider autrement ?",
+                    "meta": {"assistance_cancelled": True}
+                }]
+            }
         
         if assistance_step == "collecting_email":
             if not user_input:

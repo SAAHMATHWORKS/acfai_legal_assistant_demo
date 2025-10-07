@@ -11,7 +11,7 @@ class RoutingLogic:
     def route_after_info_collection(
         self, 
         state: MultiCountryLegalState
-    ) -> Literal["need_email", "need_description", "ready_to_confirm"]:
+    ) -> Literal["need_email", "need_description", "ready_to_confirm", "cancelled"]:
         """Route based on current assistance step and collected data"""
         
         step = state.assistance_step
@@ -21,6 +21,11 @@ class RoutingLogic:
         logger.info(f"📋 Assistance step: {step}")
         logger.info(f"   - Has email: {has_email} ({state.user_email})")
         logger.info(f"   - Has description: {has_description} ({state.assistance_description})")
+        
+        # 🔥 NEW: Handle cancellation first
+        if step == "cancelled":
+            logger.info("🔄 Assistance workflow cancelled by user")
+            return "cancelled"
         
         # Route based on current step progression
         if step == "collecting_email":
@@ -70,13 +75,14 @@ class RoutingLogic:
         logger.info(f"📋 Confirmation step: {step}")
         logger.info(f"   - Last user message: '{last_message}'")
         
-        if step == "confirmed":
+        # 🔥 NEW: Handle cancellation from confirmation step
+        if step == "cancelled":
+            logger.info("→ Routing to: cancelled (workflow cancelled)")
+            return "cancelled"
+        
+        elif step == "confirmed":
             logger.info("→ Routing to: confirmed (human approval)")
             return "confirmed"
-        
-        elif step == "cancelled":
-            logger.info("→ Routing to: cancelled")
-            return "cancelled"
         
         elif step == "confirming_send":
             # In confirmation step, check user response
@@ -86,7 +92,7 @@ class RoutingLogic:
                 logger.info("→ Routing to: confirmed (user confirmed)")
                 return "confirmed"
             
-            elif user_response in ["non", "no", "cancel", "annuler", "pas maintenant", "arrêter", "stop"]:
+            elif user_response in ["non", "no", "cancel", "annuler", "pas maintenant", "arrêter", "stop", "je ne veux plus"]:
                 logger.info("→ Routing to: cancelled (user cancelled)")
                 return "cancelled"
             
